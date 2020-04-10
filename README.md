@@ -86,7 +86,7 @@ cat /usr/pvapi/pvmax.config
    
 
 # Examples
-All the commands are self explainatory. The only thing you need to do one time is generating auth token for each user/SID combination.
+Most of the commands are self explainatory. The one time thing you need to do is generating auth token for each user/SID combination.
 
 1. Generate authentication token, needed to be run only once. Remains active unless you change the password for the user.
 ```
@@ -95,3 +95,10 @@ All the commands are self explainatory. The only thing you need to do one time i
 ```
 
 2. For cluster provisioning :  Create child IG's and then create a parent IG with child IG's. 
+3. Creating SG with multiple sizes of TDEV's. Below command will create an SG and add 2x1000GB,1x500GB devices to the SG. SLO and SRP must be specified and compression will be automatically set to on.
+```
+   pvmax sgcreate -v 1234 -n dummy_sg -p SRP_1 -l diamond -s 1000,500 -c 2,1
+```
+
+
+   
