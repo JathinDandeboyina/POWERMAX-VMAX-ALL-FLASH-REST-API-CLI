@@ -53,7 +53,7 @@ pvmax snap_relink -v {4 digit symmid} -s {source SG name} -n {snapshot name} -l 
 ```
 
 
-  *SRDF operations will be added in next version*
+  *SRDF operations, all delete operations will be added in next version*
 
 # Configuration
 *Note that the host where you install this doesn't need to have any gatekeepers. 
