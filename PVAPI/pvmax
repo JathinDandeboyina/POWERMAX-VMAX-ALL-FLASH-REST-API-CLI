@@ -3,7 +3,7 @@
 #Author     : Jathin Dandeboyina                                                             #
 #Email      : jathin.dandeboyina@dell.com                                                    #
 #Version    : 1.0                                                                            #
-#Source Repo: https://github.com/JathinDandeboyina/PVMAX-REST-API-CLI                        #
+#Source Repo: https://github.com/JathinDandeboyina/POWERMAX-VMAX-ALL-FLASH-REST-API-CLI      #
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
 #Description: This script will provide a CLI to access REST API on VMAX AF/ POWERMAX arrays  #
 #             Storage provisioning tasks, snapshot operations can be performed               #
