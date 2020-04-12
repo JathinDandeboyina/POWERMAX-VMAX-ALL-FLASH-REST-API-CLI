@@ -2,7 +2,7 @@
 
 A bash script that provides CLI to interact with RESTAPI on VMAX All Flash arrays and POWERMAX arrays. 
 
-With this you can perform provisioning of storage to standalone hosts, clusters and also perform snapvx snapshot operations.
+With this you can perform provisioning of storage to standalone hosts, clusters and perform snapvx snapshot operations.
 
 Total setup time probably takes 5 mins. 
 
@@ -10,6 +10,7 @@ You may leverage this script in infrastructure automation and complete storage p
 # Supported Platforms
 *  Dell EMC VMAX ALL FLASH & POWERMAX ARRAYS 
 >  - Code level 5978.221.221 & above
+>  - Unisphere 9.0 & above
 *  Any Unix platform with bash shell 
 *  Windows can be used with cygwin or similar emulators
 
@@ -85,7 +86,7 @@ cat /usr/pvapi/pvmax.config
 6. Type pvmax and verify if you are able to see the list of allowed commands. That's it, you are ready to perform operations using REST API. 
    
 
-# Examples
+# Usage & Examples
 Most of the commands are self explainatory. The one time thing you need to do is generating auth token for each user/SID combination.
 
 1. Generate authentication token, needed to be run only once. Remains active unless you change the password for the user.
@@ -99,6 +100,7 @@ Most of the commands are self explainatory. The one time thing you need to do is
 ```
    pvmax sgcreate -v 1234 -n dummy_sg -p SRP_1 -l diamond -s 1000,500 -c 2,1
 ```
+4. Establishing new snapshot requires "time to live" to be specified. If no expiry needed, use -t 0
 
 
    
