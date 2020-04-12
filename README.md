@@ -61,7 +61,7 @@ pvmax snap_relink -v {4 digit symmid} -s {source SG name} -n {snapshot name} -l 
 All communication happens over https calls directly to Unisphere server.*
 
 1. On your management host create the following directory /usr/pvapi/
-2. Download content of "PVMAX" from this repo and place them in /usr/pvapi/
+2. Download content of "PVAPI" directory from this repo and place them in /usr/pvapi/
 3. Create a file named pvmax.config as shown below and save it under /usr/pvapi/
 
 ```
@@ -100,7 +100,7 @@ Most of the commands are self explainatory. The one time thing you need to do is
 ```
    pvmax sgcreate -v 1234 -n dummy_sg -p SRP_1 -l diamond -s 1000,500 -c 2,1
 ```
-4. Establishing new snapshot requires "time to live" to be specified. If no expiry needed, use -t 0
+4. Establishing new snapshot requires "time to live" to be specified. If no expiry needed, use -t 0.
 
 
    
