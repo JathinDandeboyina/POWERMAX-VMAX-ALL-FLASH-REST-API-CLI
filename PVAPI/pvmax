@@ -1,0 +1,503 @@
+#!/bin/bash
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+#Author     : Jathin Dandeboyina                                                             #
+#Email      : jathin.dandeboyina@dell.com                                                    #
+#Version    : 1.0                                                                            #
+#Source Repo: https://github.com/JathinDandeboyina/PVMAX-REST-API-CLI                        #
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ #
+#Description: This script will provide a CLI to access REST API on VMAX AF/ POWERMAX arrays  #
+#             Storage provisioning tasks, snapshot operations can be performed               #
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+#MIT License                                                                                 #
+#                                                                                            #
+#Copyright (c) 2020 Dandeboyina, Jathin                                                      #
+#                                                                                            #
+#Permission is hereby granted, free of charge, to any person obtaining a copy                #
+#of this software and associated documentation files (the "Software"), to deal               #
+#in the Software without restriction, including without limitation the rights                #
+#to use, copy, modify, merge, publish, distribute, sublicense, and/or sell                   #
+#copies of the Software, and to permit persons to whom the Software is                       #
+#furnished to do so, subject to the following conditions:                                    #
+#                                                                                            #
+#The above copyright notice and this permission notice shall be included in all              #
+#copies or substantial portions of the Software.                                             #
+#                                                                                            #
+#THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR                  #
+#IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,                    #
+#FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE                 #
+#AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER                      #
+#LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,               #
+#OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE               #
+#SOFTWARE.                                                                                   #
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+# 1)Setup authentication token and use for all subsequent calls                              #
+# 2)Create IG  (With WWN's or with other IG's to form cascaded IG's for clustering)          #
+# 3)Create PG with specified dir:port combination                                            #
+# 4)Create SG, add SRP and SLO. Create user requested TDEV's and add to SG                   #
+# 5)Create Masking view                                                                      #
+# 6)Establish new snapshot                                                                   #
+# 7)Link snapshot                                                                            #
+# 8)Relink snapshot                                                                          #
+# 9)List snapshots                                                                           #
+#10)Get snapshot details                                                                     #
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~#
+MODNAME=`basename $0`
+if [ $# -eq 0 ]
+  then
+    clear
+    /usr/pvapi/pvmax USAGE
+fi
+key ()
+{
+  CONFIGFILE=/usr/pvapi/pvmax.config
+  local OPTIND
+  while getopts v: opt
+  do
+    case "$opt" in
+       v) VMAX="$OPTARG";;
+       *) USAGE;;
+    esac
+  done
+
+  if [ $VMAX == "" ]
+  then
+      echo "Specify 4 digit vmax ID"
+      exit
+  else
+      grep -w $VMAX ${CONFIGFILE} > /dev/null 2>&1
+      if [ $? -eq 0 ]
+      then
+          URL=`grep -w $VMAX ${CONFIGFILE} |awk '{print $2}'`
+          USR=`grep -w $VMAX ${CONFIGFILE} |awk '{print $4}'`
+          curl -X GET ${URL}performance/Array/keys -k -v -u ${USR} --stderr - \
+          |egrep '401 Unauthorized|Authorization: Basic' > /usr/pvapi/.${VMAX}_${USR}_temp.token
+
+          if grep -q 'Unauthorized' /usr/pvapi/.${VMAX}_${USR}_temp.token
+          then
+              echo "Retry....invalid credentials"
+          else
+              echo "Token saved for user successfully"
+              awk '{print $4}' /usr/pvapi/.${VMAX}_${USR}_temp.token > /usr/pvapi/.${VMAX}_${USR}_token
+          fi
+                  rm /usr/pvapi/.${VMAX}_${USR}_temp.token 2>/dev/null
+      else
+          echo "invalid vmax id specified...make sure specified ID is added to config file"
+          exit
+      fi
+  fi
+}
+
+igcreate ()  #NO COLONS IN WWPN
+{
+  CONFIGFILE=/usr/pvapi/pvmax.config
+  local OPTIND
+  while getopts v:n:w: opt
+  do
+    case "$opt" in
+       v) VMAX="$OPTARG";;
+       n) NAME="$OPTARG";;
+       w) WWN="$OPTARG";;
+       *) USAGE;;
+    esac
+  done
+  if [[ -z "$WWN"  || -z "$NAME" || -z "$VMAX" ]]
+  then
+     echo "provide all required values: -v vmaxid -n IG_name -w comma separated WWPN's or initiator groups for cascaded IG"
+     exit
+  else
+      grep -w $VMAX ${CONFIGFILE} > /dev/null 2>&1
+      if [ $? -eq 0 ]
+      then
+          CHECK
+          PWWN=`echo $WWN |sed 's/,/","/g'`
+          curl -X POST -d '{"hostId":"'${NAME}'","initiatorId":["'${PWWN}'"]}' ${URL}sloprovisioning/symmetrix/${FULLID}/host \
+          -H 'Authorization: Basic '${KEY}"'" -H accept:application/json -H "${CTYPE}" -k -s  |tr , \\n && echo " "
+     else
+          echo "Invalid VMAX specified..exiting"
+      fi
+  fi
+}
+
+pgcreate ()
+{
+  CONFIGFILE=/usr/pvapi/pvmax.config
+  local OPTIND
+  while getopts v:n:d: opt
+  do
+    case "$opt" in
+       v) VMAX="$OPTARG";;
+       n) NAME="$OPTARG";;
+       d) DIRPORT="$OPTARG";;
+       *) USAGE;;
+    esac
+  done
+  if [[ -z "$DIRPORT"  || -z "$NAME" || -z "$VMAX" ]]
+  then
+     echo "provide all required values: -v vmaxid -n PG_name -d dirport"
+     exit
+  else
+      grep -w $VMAX ${CONFIGFILE} > /dev/null 2>&1
+      if [ $? -eq 0 ]
+      then
+          CHECK
+          PORT=`echo $DIRPORT |awk '{print toupper($0)}' |sed 's/,/ /g'|sed 's/:/ /g'|tr -s '[[:blank:]]' '\n' |paste -d' ' - - \
+          |while read D P; do echo -n '{"directorId":"FA-'$D'","portId":"'$P'"}';done|sed 's/}{/},{/g'`
+          curl -X POST -d  '{ "portGroupId": "'${NAME}'", "symmetrixPortKey": [ '${PORT}' ] }' ${URL}sloprovisioning/symmetrix/${FULLID}/portgroup \
+          -H 'Authorization: Basic '${KEY}"'" -H accept:application/json -H "${CTYPE}" -k -s |tr , \\n && echo " "
+          else
+              echo "Invalid VMAX specified..exiting"
+          fi
+   fi
+}
+
+sgcreate ()
+{
+  CONFIGFILE=/usr/pvapi/pvmax.config
+  local OPTIND
+  while getopts v:n:p:l:s:c: opt
+  do
+    case "$opt" in
+       v) VMAX="$OPTARG";;
+       n) NAME="$OPTARG";;
+       p) SRP="$OPTARG";;
+       l) SLO="$OPTARG";;
+       s) SIZES="$OPTARG";;
+       c) COUNT="$OPTARG";;
+       *) USAGE;;
+    esac
+  done
+  if [[ -z "$SRP" || -z "$SLO" || -z "$COUNT"  || -z "$SIZES" ||-z "$NAME" || -z "$VMAX" ]]
+  then
+     echo "provide all required values: -v vmaxid -n SG_name -p SRP_name -l service_level -s size_in_GB -c count_of_devices "
+     exit
+  else
+      grep -w $VMAX ${CONFIGFILE} > /dev/null 2>&1
+      if [ $? -eq 0 ]
+      then
+          CHECK
+          #create empty storage group
+          curl -X POST -d '{"srpId":"'${SRP}'","storageGroupId":"'${NAME}'","create_empty_storage_group":true}' \
+          ${URL}sloprovisioning/symmetrix/${FULLID}/storagegroup -H 'Authorization: Basic '${KEY}"'" \
+          -H accept:application/json -H "${CTYPE}" -k -s |tr , \\n && echo " "
+          #Create and add requested TDEVs
+          SIZE=`echo ${SIZES} |sed 's/,/ /g'`
+          NUM=`echo ${COUNT} |sed 's/,/ /g'`
+          COUNTER=1
+          for NUM_OF_VOLS in `echo $NUM`
+          do
+              VOL_SIZE=`echo $SIZE |awk '{print $'$COUNTER'}'`
+              curl -X PUT -d '{"editStorageGroupActionParam":{"expandStorageGroupParam":{"num_of_vols":'${NUM_OF_VOLS}',"volumeAttribute":{"volume_size":"'${VOL_SIZE}'","capacityUnit":"GB"},"create_new_volumes":true}}}' \
+              ${URL}sloprovisioning/symmetrix/${FULLID}/storagegroup/${NAME} -H 'Authorization: Basic '${KEY}"'" \
+              -H accept:application/json -H "${CTYPE}" -k -s |tr , \\n && echo " "
+              let COUNTER=$COUNTER+1
+          done
+
+          curl -X PUT -d '{"editStorageGroupActionParam":{"editStorageGroupSLOParam":{"sloId":"'${SLO}'"}}}' \
+          ${URL}sloprovisioning/symmetrix/${FULLID}/storagegroup/${NAME} -H 'Authorization: Basic '${KEY}"'" \
+          -H accept:application/json -H "${CTYPE}" -k -s |tr , \\n && echo " "
+      else
+          echo "Invalid VMAX specified..exiting"
+      fi
+    fi
+}
+
+mvcreate ()
+{
+  CONFIGFILE=/usr/pvapi/pvmax.config
+  local OPTIND
+  while getopts v:n:i:p:s: opt
+  do
+    case "$opt" in
+       v) VMAX="$OPTARG";;
+       n) NAME="$OPTARG";;
+       i) IG="$OPTARG";;
+       p) PG="$OPTARG";;
+       s) SG="$OPTARG";;
+       *) USAGE;;
+    esac
+  done
+  if [[ -z "$SG"  || -z "$PG" || -z "$IG" || -z "$NAME" || -z "$VMAX" ]]
+  then
+      echo "provide all required values: -v vmaxid -n MV_name -i IG name -p PG name -s SG name"
+      exit
+  else
+      grep -w $VMAX ${CONFIGFILE} > /dev/null 2>&1
+      if [ $? -eq 0 ]
+      then
+          CHECK
+          #Create masking view
+          curl -X POST -d '{"portGroupSelection":{"useExistingPortGroupParam":{"portGroupId":"'${PG}'"}},"maskingViewId":"'${NAME}'","hostOrHostGroupSelection":{"useExistingHostGroupParam":{"hostGroupId":"'${IG}'"}},"storageGroupSelection":{"useExistingStorageGroupParam":{"storageGroupId":"'${SG}'"}}}' \
+          ${URL}sloprovisioning/symmetrix/${FULLID}/maskingview -H 'Authorization: Basic '${KEY}"'" \
+          -H accept:application/json -H "${CTYPE}" -k -s |tr , \\n && echo " "
+      else
+          echo "Invalid VMAX specified..exiting"
+      fi
+    fi
+}
+
+snap_list ()
+{
+  CONFIGFILE=/usr/pvapi/pvmax.config
+  local OPTIND
+  while getopts v:s: opt
+  do
+    case "$opt" in
+       v) VMAX="$OPTARG";;
+       s) SG="$OPTARG";;
+       *) USAGE;;
+    esac
+  done
+  if [[ -z "$SG" || -z "$VMAX" ]]
+  then
+      echo "provide all required values: -v vmaxid -s SG name"
+      exit
+  else
+      grep -w $VMAX ${CONFIGFILE} > /dev/null 2>&1
+      if [ $? -eq 0 ]
+      then
+          CHECK
+          #Get list of snapshots
+          curl -X GET ${URL}replication/symmetrix/${FULLID}/storagegroup/${SG}/snapshot/ -H 'Authorization: Basic '${KEY}"'" \
+          -H accept:application/json -H "${CTYPE}" -k -s |tr , \\n && echo " "
+      else
+          echo "Invalid VMAX specified..exiting"
+      fi
+    fi
+}
+
+snap_get ()
+{
+  CONFIGFILE=/usr/pvapi/pvmax.config
+  local OPTIND
+  while getopts v:s:n:g: opt
+  do
+    case "$opt" in
+       v) VMAX="$OPTARG";;
+       s) SG="$OPTARG";;
+       n) NAME="$OPTARG";;
+       g) GENUM="$OPTARG";;
+       *) USAGE;;
+    esac
+  done
+  if [[ -z "$SG" || -z "$VMAX" || -z "$NAME" || -z "$GENUM" ]]
+  then
+      echo "provide all required values: -v vmaxid -s SG name -n snap name -g generation number"
+      exit
+  else
+      grep -w $VMAX ${CONFIGFILE} > /dev/null 2>&1
+      if [ $? -eq 0 ]
+      then
+          CHECK
+          #Get a specific snapshot
+          curl -X GET ${URL}replication/symmetrix/${FULLID}/storagegroup/${SG}/snapshot/${NAME}/generation/${GENUM} \
+          -H 'Authorization: Basic '${KEY}"'" -H accept:application/json -H "${CTYPE}" -k -s |tr , \\n && echo " "
+      else
+          echo "Invalid VMAX specified..exiting"
+      fi
+    fi
+}
+
+snap_establish ()
+{
+  CONFIGFILE=/usr/pvapi/pvmax.config
+  local OPTIND
+  while getopts v:s:n:t: opt
+  do
+    case "$opt" in
+       v) VMAX="$OPTARG";;
+       s) SG="$OPTARG";;
+       n) NAME="$OPTARG";;
+       t) TTL="$OPTARG";;
+       *) USAGE;;
+    esac
+  done
+  if [[ -z "$SG" || -z "$VMAX" || -z "$NAME" || -z "$TTL" ]]
+  then
+      echo "provide all required values: -v vmaxid -s source SG name -n snapshot name -t time to live in days"
+      exit
+  else
+      grep -w $VMAX ${CONFIGFILE} > /dev/null 2>&1
+      if [ $? -eq 0 ]
+      then
+          CHECK
+          #Create snapshot
+          curl -X POST -d '{"snapshotName":"'$NAME'","timeToLive":'$TTL'}' ${URL}90/replication/symmetrix/${FULLID}/storagegroup/${SG}/snapshot/ \
+          -H 'Authorization: Basic '${KEY}"'" -H accept:application/json -H "${CTYPE}" -k -s |tr , \\n && echo " "
+      else
+          echo "Invalid VMAX specified..exiting"
+      fi
+    fi
+}
+
+snap_link ()
+{
+  CONFIGFILE=/usr/pvapi/pvmax.config
+  local OPTIND
+  while getopts v:s:n:l:g: opt
+  do
+    case "$opt" in
+       v) VMAX="$OPTARG";;
+       s) SOURCESG="$OPTARG";;
+       n) NAME="$OPTARG";;
+       l) LINKSG="$OPTARG";;
+       g) GENUM="$OPTARG";;
+       *) USAGE;;
+    esac
+  done
+  if [[ -z "$SOURCESG" || -z "$VMAX" || -z "$NAME" || -z "$LINKSG" || -z "$GENUM" ]]
+  then
+      echo "provide all required values: -v vmaxid -s source SG name -n snapshot name -l link SG name -g generation number"
+      exit
+  else
+      grep -w $VMAX ${CONFIGFILE} > /dev/null 2>&1
+      if [ $? -eq 0 ]
+      then
+          CHECK
+          curl -X PUT -d '{"link":{"linkStorageGroupName": "'${LINKSG}'"},"action": "Link"}' ${URL}replication/symmetrix/${FULLID}/storagegroup/${SOURCESG}/snapshot/${NAME}/generation/${GENUM} \
+          -H 'Authorization: Basic '${KEY}"'" -H accept:application/json -H "${CTYPE}" -k -s -v 2>&1 \
+          |egrep '< HTTP|message' |tee /dev/stderr |grep 204 1>/dev/null
+
+          if [ $? -eq 0 ]
+          then
+              echo "SNAP link completed successfully"
+          fi
+      else
+          echo "Invalid VMAX specified..exiting"
+      fi
+  fi
+}
+
+snap_unlink ()
+{
+  CONFIGFILE=/usr/pvapi/pvmax.config
+  local OPTIND
+  while getopts v:s:n:l:g: opt
+  do
+    case "$opt" in
+       v) VMAX="$OPTARG";;
+       s) SOURCESG="$OPTARG";;
+       n) NAME="$OPTARG";;
+       l) UNLINKSG="$OPTARG";;
+       g) GENUM="$OPTARG";;
+       *) USAGE;;
+    esac
+  done
+  if [[ -z "$SOURCESG" || -z "$VMAX" || -z "$NAME" || -z "$UNLINKSG" || -z "$GENUM" ]]
+  then
+      echo "provide all required values: -v vmaxid -s source SG name -n snapshot name -l unlink SG name -g generation number"
+      exit
+  else
+      grep -w $VMAX ${CONFIGFILE} > /dev/null 2>&1
+      if [ $? -eq 0 ]
+      then
+          CHECK
+          curl -X PUT -d '{"unlink":{"unlinkStorageGroupName": "'${UNLINKSG}'"},"action": "Unlink"}' ${URL}replication/symmetrix/${FULLID}/storagegroup/${SOURCESG}/snapshot/${NAME}/generation/${GENUM} \
+          -H 'Authorization: Basic '${KEY}"'" -H accept:application/json -H "${CTYPE}" -k -s -v 2>&1 \
+          |egrep '< HTTP|message' |tee /dev/stderr |grep 204 1>/dev/null
+
+          if [ $? -eq 0 ]
+          then
+              echo "SNAP unlink completed successfully"
+          fi
+      else
+          echo "Invalid VMAX specified..exiting"
+      fi
+    fi
+}
+snap_relink ()
+{
+  CONFIGFILE=/usr/pvapi/pvmax.config
+  local OPTIND
+  while getopts v:s:n:l:g: opt
+  do
+    case "$opt" in
+       v) VMAX="$OPTARG";;
+       s) SOURCESG="$OPTARG";;
+       n) NAME="$OPTARG";;
+       l) LINKSG="$OPTARG";;
+       g) GENUM="$OPTARG";;
+       *) USAGE;;
+    esac
+  done
+  if [[ -z "$SOURCESG" || -z "$VMAX" || -z "$NAME" || -z "$LINKSG" || -z "$GENUM" ]]
+  then
+      echo "$VMAX $SG"
+      echo "provide all required values: -v vmaxid -s source SG name -n snapshot name -l link SG name -g generation number"
+      exit
+  else
+      grep -w $VMAX ${CONFIGFILE} > /dev/null 2>&1
+      if [ $? -eq 0 ]
+      then
+          CHECK
+          curl -X PUT -d '{"relink":{"relinkStorageGroupName": "'${LINKSG}'"},"action": "Relink"}' ${URL}replication/symmetrix/${FULLID}/storagegroup/${SOURCESG}/snapshot/${NAME}/generation/${GENUM} \
+          -H 'Authorization: Basic '${KEY}"'" -H accept:application/json -H "${CTYPE}" -k -s -v 2>&1 \
+          |egrep '< HTTP|message' |tee /dev/stderr |grep 204 1>/dev/null
+          if [ $? -eq 0 ]
+          then
+              echo "SNAP relink completed successfully"
+          fi
+
+      else
+          echo "Invalid VMAX specified….exiting"
+      fi
+    fi
+}
+
+CHECK ()
+{
+          USR=`grep -w $VMAX ${CONFIGFILE} |awk '{print $4}'`
+          if [[ -f /usr/pvapi/.${VMAX}_${USR}_token ]]
+          then
+              KEY=$(cat /usr/pvapi/.${VMAX}_${USR}_token)
+          else
+               echo "Authentication token not found..run the following command"
+               echo "pvmax key -v {4 digit symmid}"
+               exit 2
+          fi
+          URL=`grep -w $VMAX ${CONFIGFILE} |awk '{print $2}'`
+          FULLID=`grep -w $VMAX ${CONFIGFILE} |awk '{print $3}'`
+          CTYPE="Content-Type: application/json"
+}
+USAGE ()
+{
+echo "----------PVMAX RESTAPI COMMANDS----------"
+echo " "
+echo "${MODNAME} key -v {4 digit symmid}"
+echo "-- This command is used to set authentication key for user specified in config file for a particular array"
+echo " "
+echo "${MODNAME} igcreate -v {4 digit symmid} -n {name of initiator group} -w {comma separated WWN without colons or child IG's to form parent IG}"
+echo "-- This will create initiator group"
+echo " "
+echo "${MODNAME} pgcreate -v {4 digit symmid} -n {name of port group} -d {comma separated dirport as 1d:4,2d:11}"
+echo "-- This will create port group"
+echo " "
+echo "${MODNAME} sgcreate -v {4 digit symmid} -n {name of storage group} -p {SRP_name} -l {SLO name} -s {comma separated sizes of LUN in GB} -c {comma separated count of LUNs}"
+echo "-- This will create SG with specified SLO,SRP and creates requested TDEV's and add them to SG"
+echo " "
+echo "${MODNAME} mvcreate -v {4 digit symmid} -n {name of masking view} -i {init group} -p {port group} -s {storage group}"
+echo "-- This will create masking view"
+echo " "
+echo "${MODNAME} snap_list -v {4 digit symmid} -s {SG name}"
+echo "-- This will list the names of snapshots associated with specified SG"
+echo " "
+echo "${MODNAME} snap_get -v {4 digit symmid} -s {SG name} -n {snapshot name} -g {generation number}"
+echo "-- This will show details of a specific snapshot"
+echo " "
+echo "${MODNAME} snap_establish -v {4 digit symmid} -s {source SG name} -n {snapshot name} -t {no of days to live}"
+echo "-- This will create a new snapshot with specified name on given SG"
+echo " "
+echo "${MODNAME} snap_link -v {4 digit symmid} -s {source SG name} -n {snapshot name} -l {link SG name} -g {generation number}"
+echo "-- This will link a specific snap of source SG to target SG"
+echo " "
+echo "${MODNAME} snap_unlink -v {4 digit symmid} -s {source SG name} -n {snapshot name} -l {unlink SG name} -g {generation number}"
+echo "-- This will unlink a specific snap of source SG from target SG"
+echo " "
+echo "${MODNAME} snap_relink -v {4 digit symmid} -s {source SG name} -n {snapshot name} -l {link SG name} -g {generation number}"
+echo "-- This will link a specific snap of source SG to target SG"
+echo " "
+exit 0
+}
+
+"$@"
+
+exit 0 
